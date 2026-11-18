@@ -232,6 +232,37 @@
                 </button>
               </div>
             </div>
+
+            <div class="document-upload">
+  <input
+    id="document-input"
+    type="file"
+    accept=".pdf,.docx,.txt"
+    hidden
+  />
+
+  <button
+    id="document-upload-button"
+    type="button"
+    class="text-button"
+  >
+    📎 Attach Document
+  </button>
+
+  <span id="document-upload-status" role="status">
+    PDF, DOCX or TXT
+  </span>
+</div>
+
+<div id="document-location-panel" hidden>
+  <label for="document-location-select">
+    Select location found in document:
+  </label>
+
+  <select id="document-location-select">
+    <option value="">Select a location</option>
+  </select>
+</div>
           </form>
         </section>
 
@@ -292,7 +323,7 @@
         <div id="memory-modal-foot" class="modal-foot"></div>
       </div>
     </div>
-
+    <script src="/ui-assets/document-upload.js?v=1" defer></script>
     <script src="/ui-assets/markdown-it-15.0.2.min.js" defer></script>
     <script src="/ui-assets/app.js?v=6" defer></script>
   </body>

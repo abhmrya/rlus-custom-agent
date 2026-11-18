@@ -1464,20 +1464,48 @@ async function loadConfig() {
     throw error;
   }
 }
+
+
 elements.composer.addEventListener("submit", async (event) => {
   event.preventDefault();
+
   const text = elements.promptInput.value;
-  if (!text.trim()) return;
+  if (!text.trim() || state.busy) return;
+
+  // Save the original user question for failure recovery.
+  const originalPrompt =
+    elements.promptInput.dataset.documentOriginalPrompt;
+
+  // Remove temporary document metadata from the input state.
+  delete elements.promptInput.dataset.documentOriginalPrompt;
+
+  // Clear the composer immediately.
   elements.promptInput.value = "";
   elements.promptInput.style.height = "auto";
   updateSendState();
+
   try {
     await sendText(text);
-  } catch {
-    elements.promptInput.value = text;
-    updateSendState();
+
+    // Reset the selected document location only after success.
+    document.dispatchEvent(
+      new CustomEvent("rlus:message-sent")
+    );
+  } catch (error) {
+    // Restore only the user's original question.
+    // Do not restore the extracted document context.
+    elements.promptInput.value = originalPrompt ?? text;
+
+    // Recalculate textarea height and send-button state.
+    elements.promptInput.dispatchEvent(
+      new Event("input", { bubbles: true })
+    );
+
+    elements.promptInput.focus();
   }
 });
+
+
 
 elements.promptInput.addEventListener("input", () => {
   elements.promptInput.style.height = "auto";

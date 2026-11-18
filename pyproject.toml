@@ -16,6 +16,11 @@ dependencies = [
     "python-dotenv>=1.2.1",
     "databricks-sdk>=0.124.0",
     "databricks-agents>=1.9.3",
+    "httpx>=0.28.1",
+    "python-multipart>=0.0.33",
+    "pypdf>=7.1.0",
+    "python-docx>=1.2.0",
+    "spacy>=3.8.18",
 ]
 
 [build-system]

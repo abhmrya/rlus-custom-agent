@@ -1,3 +1,4 @@
+
 """Browser UI and managed-state demo controls for an Agent Bricks agent project."""
 
 from __future__ import annotations
@@ -10,7 +11,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -18,10 +19,15 @@ from pydantic import BaseModel, Field
 from databricks_agentkit import workspace_client
 from databricks_agentkit.runtime.model_services import list_ai_gateway_model_services
 from databricks_agentkit.runtime.store import runtime_store_is_persistent_environment
+from runtime.document_parser import (
+    extract_document_text,
+    extract_locations,
+)
 
 _UI_ROOT = Path(__file__).resolve().parent.parent / "ui"
-_INSTANCE_ID = uuid.uuid4().hex[:12]  # identifies this process in the UI
+_INSTANCE_ID = uuid.uuid4().hex[:12]
 _AGENTS_API = "/api/2.0/agents"
+
 _MESSAGE_ROLES = {
     "ai",
     "assistant",
@@ -55,26 +61,16 @@ _USER_HEADERS = ("x-forwarded-email", "x-forwarded-user")
 
 
 def _memory_store() -> str:
-    # Same resolution the agent uses (AGENT_MEMORY_STORE env → agent.toml binding), so the demo
-    # panels reflect exactly the store the agent reads/writes.
     from databricks_agentkit.runtime.tool_manifest import resolve_memory_store
-
     return (resolve_memory_store() or "").strip().strip("/")
 
 
 def _session_store() -> str:
     from databricks_agentkit.runtime.tool_manifest import resolve_session_store
-
     return (resolve_session_store() or "").strip()
 
 
 def _request_actor(request: Request) -> str:
-    """The actor for a demo request — the signed-in user, so the panels show that user's own data.
-
-    Mirrors how the agent resolves its actor (same forwarded-identity headers), so the memory and
-    session views here list exactly what the agent reads/writes for the current user. Falls back to
-    ``"agent"`` locally / when unauthenticated.
-    """
     for header in _USER_HEADERS:
         if value := request.headers.get(header):
             return value
@@ -82,7 +78,6 @@ def _request_actor(request: Request) -> str:
 
 
 def _request_session_id(request: Request) -> str:
-    """Read the chat session from the session_id query parameter that demoUrl() sends."""
     session_id = request.query_params.get("session_id")
     if not session_id:
         raise HTTPException(status_code=400, detail="session_id is required")
@@ -95,39 +90,32 @@ def _is_deployed() -> bool:
     return bool(os.getenv("DATABRICKS_APP_NAME")) and not is_local
 
 
-# Tracing turns on only with both a destination and an experiment, mirroring
-# the runtime tracing setup so the UI card matches what the agent actually does.
 _TRACING_DESTINATION_VARS = ("MLFLOW_TRACKING_URI", "MLFLOW_TRACING_DESTINATION")
 
 
 @lru_cache(maxsize=1)
 def _workspace_host() -> str:
-    """Best-effort workspace host for building MLflow links; never raises.
-
-    Cached because building a WorkspaceClient blocks on auth, and the async config route calls this
-    on every page load.
-    """
     try:
         host = workspace_client().config.host or ""
-    except Exception:  # noqa: BLE001 - host is best-effort; a failure must not break the config route
+    except Exception:
         host = os.getenv("DATABRICKS_HOST", "")
     return host.rstrip("/")
 
 
 def _tracing() -> dict:
-    """Whether MLflow tracing is configured, plus a best-effort link to its experiment."""
     destination = ""
     for var in _TRACING_DESTINATION_VARS:
         if value := os.getenv(var):
             destination = value
             break
+
     experiment_id = os.getenv("MLFLOW_EXPERIMENT_ID", "").strip()
     experiment_name = os.getenv("MLFLOW_EXPERIMENT_NAME", "").strip()
     enabled = bool(destination) and bool(experiment_id or experiment_name)
     url: str | None = None
+
     if enabled:
         if destination.startswith(("http://", "https://")) and "databricks" not in destination:
-            # A local OSS MLflow server: link into its own UI.
             base = destination.rstrip("/")
             url = f"{base}/#/experiments/{experiment_id}" if experiment_id else base
         else:
@@ -138,44 +126,32 @@ def _tracing() -> dict:
                     if experiment_id
                     else f"{host}/ml/experiments"
                 )
+
     return {"enabled": enabled, "experiment_id": experiment_id or None, "url": url}
 
 
 def _default_model() -> str:
-    """The agent's configured default endpoint (``agent.agent.MODEL``), imported lazily.
-
-    Imported inside the function, not at module load, so the light UI import path doesn't pull in the
-    agent stack (matching ``_checkpoint_history`` below).
-    """
     from agent.agent import MODEL
-
     return MODEL
 
 
 def _rank_models(default: str, names: list[str]) -> list[str]:
-    """Pin the default first, then every remaining gateway model, without duplicates."""
     ordered = [default, *sorted(n for n in names if n != default)]
     seen: set[str] = set()
     return [n for n in ordered if not (n in seen or seen.add(n))]
 
 
 def _discover_chat_models() -> list[str]:
-    """The AI Gateway chat models for the picker: default first, then every listed model.
-
-    Best-effort: if listing fails (missing permission, repeated transient errors), fall back to just
-    the default so the picker still works. The default is always present and first.
-    """
     default = _default_model()
     try:
         names = list_ai_gateway_model_services(workspace_client())
-    except Exception:  # noqa: BLE001 - a broken listing must not break the whole config endpoint
+    except Exception:
         names = []
     return _rank_models(default, names)
 
 
-# The framework this overlay's agent.toml declares; load_tools rejects a manifest for another one.
 _FRAMEWORK = "langgraph"
-# Readable type names for the agent.toml [[tools]] kinds, shown as badges in the Tools pane.
+
 _TOOL_LABELS = {
     "mcp": "MCP service",
     "uc_function": "UC function",
@@ -183,8 +159,7 @@ _TOOL_LABELS = {
     "genie_agent": "Genie Agent",
     "sandbox": "Sandbox",
 }
-# The `agentbricks tools add` recipes the Tools pane offers to copy (the ones
-# `agentbricks tools list` prints), plus the command that discovers more MCP services.
+
 _ADD_COMMANDS = (
     {
         "kind": "mcp",
@@ -216,11 +191,6 @@ _ADD_COMMANDS = (
 
 
 def _connected_tools() -> list[dict[str, str]]:
-    """The managed ``[[tools]]`` bindings in agent.toml, in manifest order.
-
-    Uses the same parser the adapters use, re-reading agent.toml on every call so a binding added or
-    removed with ``agentbricks tools add``/``remove`` shows up without restarting the app.
-    """
     from databricks_agentkit.runtime.tool_manifest import load_tools
 
     connected = []
@@ -230,13 +200,13 @@ def _connected_tools() -> list[dict[str, str]]:
             source = source or tool.service or ""
         else:
             source = tool.service or tool.function or tool.space_id or ""
+
         connected.append(
             {
                 "id": tool.id,
                 "kind": tool.kind,
                 "label": _TOOL_LABELS.get(tool.kind, tool.kind),
                 "source": source,
-                # Unset auth runs as the app, matching the adapters' `tool.auth or "app"`.
                 "auth": tool.auth or "app",
             }
         )
@@ -244,7 +214,6 @@ def _connected_tools() -> list[dict[str, str]]:
 
 
 def _local_tools() -> list[dict[str, str]]:
-    """The Python tools the agent is built with (``agent.tools.all_tools()``), imported lazily."""
     from agent.tools import all_tools
 
     local = []
@@ -255,18 +224,20 @@ def _local_tools() -> list[dict[str, str]]:
 
 
 def _tools() -> dict[str, Any]:
-    """The Tools pane payload. Each section fails on its own so one bad source can't hide the rest."""
     errors: list[dict[str, str]] = []
+
     try:
         connected = _connected_tools()
-    except Exception as exc:  # noqa: BLE001 - surface a bad agent.toml in the pane, not as a 500
+    except Exception as exc:
         connected = []
         errors.append({"section": "connected", "message": str(exc)})
+
     try:
         local = _local_tools()
-    except Exception as exc:  # noqa: BLE001 - surface a broken agent.tools import in the pane
+    except Exception as exc:
         local = []
         errors.append({"section": "local", "message": f"Could not load agent.tools: {exc}"})
+
     return {
         "connected": connected,
         "local": local,
@@ -411,7 +382,6 @@ def _require_session() -> None:
 
 async def _checkpoint_history(session_id: str, actor: str) -> dict[str, Any]:
     from databricks_agentkit.langgraph import read_history
-
     return await read_history(session_id, actor)
 
 
@@ -444,6 +414,7 @@ def _chat_session_items(result: dict[str, Any]) -> dict[str, Any]:
 
 def install_ui(app: FastAPI) -> None:
     """Mount the Agent Bricks UI and its runtime control endpoints."""
+
     app.mount("/ui-assets", StaticFiles(directory=_UI_ROOT), name="agentbricks-demo-ui-assets")
 
     @app.middleware("http")
@@ -467,6 +438,7 @@ def install_ui(app: FastAPI) -> None:
         runtime_store_mode = (
             "Runtime Store" if runtime_store_persistent else "In-process Runtime Store"
         )
+
         return {
             "session_id": _request_session_id(request),
             "instance_id": _INSTANCE_ID,
@@ -502,8 +474,6 @@ def install_ui(app: FastAPI) -> None:
 
     @app.get("/api/demo/models", include_in_schema=False)
     async def demo_models() -> dict:
-        # Model discovery can take several seconds in a large workspace. Keep it separate from the
-        # runtime config so the rest of the UI becomes interactive immediately.
         available_models = await asyncio.to_thread(_discover_chat_models)
         return {"default": _default_model(), "available": available_models}
 
@@ -527,18 +497,20 @@ def install_ui(app: FastAPI) -> None:
         path_prefix: str | None = Query(default=None),
         actor: str | None = Query(default=None),
     ) -> dict:
-        # The UI can browse another actor's memories by passing ?actor=; default to the viewer.
         _require_memory()
         return await _managed_call(
-            _state_client().list_memory_entries, actor or _request_actor(request), path_prefix
+            _state_client().list_memory_entries,
+            actor or _request_actor(request),
+            path_prefix,
         )
 
     @app.post("/api/demo/memory/search", include_in_schema=False)
     async def search_memory_entries(request: Request, payload: MemorySearchRequest) -> dict:
-        # payload.actor lets the UI search another actor's memories; default to the viewer.
         _require_memory()
         return await _managed_call(
-            _state_client().search_memory_entries, payload.actor or _request_actor(request), payload
+            _state_client().search_memory_entries,
+            payload.actor or _request_actor(request),
+            payload,
         )
 
     @app.post("/api/demo/sessions", include_in_schema=False)
@@ -550,10 +522,105 @@ def install_ui(app: FastAPI) -> None:
             _request_session_id(request),
         )
 
+
+    # Document upload endpoint
+    @app.post("/api/demo/documents/upload", include_in_schema=False)
+    async def upload_document(
+        request: Request,
+        file: UploadFile = File(...),
+    ) -> dict:
+        session_id = _request_session_id(request)
+        actor = _request_actor(request)
+
+        if not file.filename:
+            raise HTTPException(
+                status_code=400,
+                detail="Please select a document.",
+            )
+
+        max_file_size = 15 * 1024 * 1024
+        content = await file.read(max_file_size + 1)
+
+        if len(content) > max_file_size:
+            raise HTTPException(
+                status_code=413,
+                detail="File is too large. Maximum size is 15 MB.",
+            )
+
+        try:
+            extracted_text = extract_document_text(
+                file.filename,
+                content,
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=str(exc),
+            ) from exc
+
+        # Detect locations from extracted document text.
+        locations = extract_locations(extracted_text)
+
+        # Local development uses the in-process checkpointer.
+        # Managed Session Store persistence is used when deployed.
+        persisted = False
+
+        if _is_deployed():
+            _require_session()
+
+            await _managed_call(
+                _state_client().ensure_session,
+                actor,
+                session_id,
+            )
+
+            session = await _managed_call(
+                _state_client().get_session,
+                session_id,
+            )
+
+            if session.get("actor_id") != actor:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Session belongs to another actor.",
+                )
+
+            await _managed_call(
+                _state_client().append_session_items,
+                session_id,
+                [
+                    {
+                        "kind": "uploaded_document",
+                        "filename": file.filename,
+                        "text": extracted_text,
+                        "locations": locations,
+                    }
+                ],
+            )
+
+            persisted = True
+
+        return {
+            "success": True,
+            "filename": file.filename,
+            "characters_extracted": len(extracted_text),
+            "session_id": session_id,
+            "document_text": extracted_text,
+            "locations": locations,
+            "persisted": persisted,
+            "message": (
+                "Document uploaded and saved to this session."
+                if persisted
+                else "Document uploaded and extracted successfully."
+            ),
+        }
+
+
     @app.get("/api/demo/sessions", include_in_schema=False)
     async def list_sessions(request: Request) -> dict:
         session_id = _request_session_id(request)
         actor = _request_actor(request)
+
         if not _session_store():
             return {
                 "sessions": [
@@ -566,7 +633,9 @@ def install_ui(app: FastAPI) -> None:
                 "current_session_id": session_id,
                 "managed": False,
             }
+
         result = await _managed_call(_state_client().list_sessions, actor)
+
         return {
             **result,
             "sessions": _chat_sessions(result),
@@ -578,8 +647,10 @@ def install_ui(app: FastAPI) -> None:
     async def open_session(request: Request, session_id: str) -> JSONResponse:
         _require_session()
         session = await _managed_call(_state_client().get_session, session_id)
+
         if session.get("actor_id") != _request_actor(request):
             raise HTTPException(status_code=403, detail="Session belongs to another actor.")
+
         return JSONResponse(
             {
                 "session_id": session_id,
@@ -591,7 +662,10 @@ def install_ui(app: FastAPI) -> None:
     @app.get("/api/demo/session", include_in_schema=False)
     async def get_session(request: Request) -> dict:
         _require_session()
-        return await _managed_call(_state_client().get_session, _request_session_id(request))
+        return await _managed_call(
+            _state_client().get_session,
+            _request_session_id(request),
+        )
 
     @app.post("/api/demo/session/items", include_in_schema=False)
     async def append_session_items(request: Request, payload: SessionItemsRequest) -> dict:
@@ -606,6 +680,7 @@ def install_ui(app: FastAPI) -> None:
     async def list_session_items(request: Request) -> dict:
         session_id = _request_session_id(request)
         actor = _request_actor(request)
+
         if not app.auth_policy.requires_user:
             return await _checkpoint_history(session_id, actor)
 
@@ -614,7 +689,8 @@ def install_ui(app: FastAPI) -> None:
         auth = RequestAuthContext.from_headers(request.headers)
         try:
             result = await _checkpoint_history(
-                auth.namespace("session", session_id), auth.namespace("actor", actor)
+                auth.namespace("session", session_id),
+                auth.namespace("actor", actor),
             )
             return {**result, "session_id": session_id}
         finally:
