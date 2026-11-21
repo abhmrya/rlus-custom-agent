@@ -6,11 +6,7 @@ env:
 - name: MLFLOW_TRACKING_URI
   value: databricks
 - name: MLFLOW_EXPERIMENT_ID
-  value: '2679742451820235'
-- name: AGENT_MEMORY_STORE
-  value: rlus-custom-agent-oidlrt-memory
-- name: AGENT_SESSION_STORE
-  value: rlus-custom-agent-oidlrt-sessions
+  value: '3947420640100335'
 - name: PIP_INDEX_URL
   value: https://pypi.org/simple/
 - name: UV_INDEX_URL
@@ -22,6 +18,8 @@ env:
 - name: DATABRICKS_AGENTBRICKS_RUNTIME_STORE_DATABASE
   value: agent-bricks-rlus-custom-agent
 - name: DATABRICKS_AGENTBRICKS_RUNTIME_STORE_USERNAME
-  value: fc08c700-1bf0-47f1-9d56-55f160005e64
+  value: 7bdd1087-38bf-4309-90c5-67eb41724fa6
 - name: DATABRICKS_AGENTBRICKS_RUNTIME_STORE_SCHEMA
   value: databricks_agentkit_runtime
+- name: WEATHER_MCP_URL
+  value: https://employee-weather-mcp-7474646409320529.aws.databricksapps.com/mcp

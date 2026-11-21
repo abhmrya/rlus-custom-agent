@@ -5,15 +5,20 @@ framework = "langgraph"
 server = "agentbricks"
 deployment_name = "rlus-custom-agent"
 
-[memory_store]
-name = "rlus-custom-agent-oidlrt-memory"
-
-[session_store]
-name = "rlus-custom-agent-oidlrt-sessions"
-
 [tracing]
-experiment_name = "/Shared/agentbricks_traces/rlus-custom-agent-oidlrt"
+experiment_name = "/Shared/agentbricks_traces/rlus-custom-agent"
+
 [[tools]]
 id = "web_search"
 auth = "user"
 source = {kind = "mcp", service = "system.ai.web_search"}
+
+[[tools]]
+id = "dbsql"
+auth = "user"
+source = {kind = "mcp", service = "system.ai.dbsql"}
+
+[[tools]]
+id = "genie_one"
+auth = "user"
+source = {kind = "genie_one"}

@@ -224,6 +224,10 @@
       setStatus(
         `Selected location: ${locationSelect.value}`
       );
+    } else if (uploadedDocument) {
+      setStatus(
+        `${uploadedDocument.locations.length} location(s) available in document.`
+      );
     }
   });
 
@@ -245,37 +249,33 @@
       }
 
       const selectedLocation = locationSelect.value;
-
-      if (
-        uploadedDocument.locations.length > 1 &&
-        !selectedLocation
-      ) {
-        event.preventDefault();
-        event.stopImmediatePropagation();
-
-        setStatus(
-          "Please select a location before sending."
-        );
-
-        locationSelect.focus();
-        return;
-      }
+      const detectedLocations = uploadedDocument.locations;
 
       const originalPrompt = promptInput.value;
 
       const documentContext = [
         "[UPLOADED DOCUMENT CONTEXT]",
+
         `Filename: ${uploadedDocument.filename}`,
+
         uploadedDocument.documentId
           ? `Document ID: ${uploadedDocument.documentId}`
           : "",
+
         selectedLocation
           ? `Selected location: ${selectedLocation}`
-          : uploadedDocument.locations.length === 0
-            ? "No location was detected in this document."
-            : "",
+          : "No location selected by the user.",
+
+        `All detected document locations: ${JSON.stringify(detectedLocations)}`,
+
+        detectedLocations.length > 0
+          ? "When the user explicitly requests weather for all document locations, use the complete detected locations list above."
+          : "No location was detected in this document.",
+
         "Extracted document text:",
+
         uploadedDocument.text,
+
         "[END DOCUMENT CONTEXT]"
       ]
         .filter(Boolean)
